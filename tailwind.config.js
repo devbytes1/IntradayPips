@@ -1,31 +1,22 @@
-
-module.exports = {
-  mode: 'jit',
-  purge: {
-    enabled: process.env.NODE_ENV === 'production',
-    safeList: [],
-    content: ['./index.html', './src/**/*.tsx', './src/**/*.ts'],
-  },
-  theme: {
-    minWidth: {
-      '40': '10rem',
-      '60': '15rem',
-      '80': '20rem',
-      '100': '25rem',
-    },
-    maxWidth: {
-      '120': '30rem',
-      '160': '40rem',
-      '200': '50rem',
-    }
-  },
-  variants: {},
-  plugins: [
-    require('daisyui'),
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
   ],
-  daisyui: {
-    themes: [
-      'emerald'
-    ],
-  }
+  darkMode: 'class',
+  theme: {
+    extend: {
+      animation: {
+        marquee: 'marquee 25s linear infinite',
+      },
+      keyframes: {
+        marquee: {
+          '0%': { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-100%)' },
+        },
+      },
+    },
+  },
+  plugins: [],
 }
