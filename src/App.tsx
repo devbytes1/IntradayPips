@@ -1013,7 +1013,6 @@ const Pricing = () => {
             features={[
               "Everything in Monthly",
               "Save ~18% vs Monthly",
-              "Quarterly Market Outlook"
             ]} 
           />
           <PricingCard 
