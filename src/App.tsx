@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   TrendingUp, Shield, Activity, Users, Check, Menu, X as CloseIcon, 
   ArrowRight, BarChart2, Smartphone, Sun, Moon, Calendar, 
-  ChevronLeft, ChevronRight, Instagram, Facebook, Linkedin, Send, Youtube
+  ChevronLeft, ChevronRight, Instagram, Send, Youtube, MessageCircle, Calculator, RefreshCw
 } from 'lucide-react';
 
 // --- TYPES ---
@@ -24,8 +24,19 @@ interface MarketPair {
   isForex: boolean;
 }
 
+interface PricingCardProps {
+  title: string;
+  oldTitle?: string;
+  price: string;
+  period: string;
+  oldPeriod?: string;
+  features: string[];
+  recommended?: boolean;
+  badgeText?: string;
+}
+
 // --- DATA SOURCE: June 2025 - Nov 2025 ---
-// Derived from your Excel History Files
+// Based on Intraday pips history.xlsx (Week 1 - Week 24)
 const MANUAL_DATA: ManualDataMap = {
   // June 2025 (Month 5)
   "2025-5": [
@@ -183,7 +194,7 @@ const generateMonthData = (year: number, month: number): DayData[] => {
     });
   }
 
-  // Fallback for non-data months
+  // Fallback: Return empty data for non-manual months
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   return Array.from({ length: daysInMonth }, (_, i) => {
     return { day: i + 1, pips: 0, isWin: false, noTrade: true };
@@ -193,6 +204,263 @@ const generateMonthData = (year: number, month: number): DayData[] => {
 const getMonthName = (monthIndex: number): string => {
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   return months[monthIndex];
+};
+
+// --- COMPONENTS ---
+
+const PipsCalculator = () => {
+  const [pair, setPair] = useState('EUR/USD');
+  const [lotSize, setLotSize] = useState('1.0');
+  const [pips, setPips] = useState('10');
+  const [rates, setRates] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  
+  // New States for Price inputs
+  const [currentPrice, setCurrentPrice] = useState<string>('');
+  const [forecastPrice, setForecastPrice] = useState<string>('');
+
+  const getPipDecimal = (p: string) => (p.includes('JPY') || p.includes('XAU')) ? 0.01 : 0.0001;
+  const getDisplayDecimals = (p: string) => (p.includes('JPY') || p.includes('XAU')) ? 2 : 4;
+
+  // Helper to calculate exchange rate from USD-based rates object
+  const getExchangeRate = (pairName: string, ratesData: any) => {
+    if (!ratesData) return 1;
+    const base = pairName.split('/')[0];
+    const quote = pairName.split('/')[1];
+    const rateBase = base === 'USD' ? 1 : (ratesData[base] || 1);
+    const rateQuote = quote === 'USD' ? 1 : (ratesData[quote] || 1);
+    return rateQuote / rateBase;
+  };
+
+  useEffect(() => {
+    const fetchRates = async () => {
+      try {
+        const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+        const data = await res.json();
+        setRates(data.rates);
+        setLoading(false);
+      } catch (e) {
+        console.error("Failed to fetch rates");
+        setLoading(false);
+      }
+    };
+    fetchRates();
+    // Refresh every minute
+    const interval = setInterval(fetchRates, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Update current price & recalculate forecast when rates or pair change
+  useEffect(() => {
+    if (rates) {
+      const rate = getExchangeRate(pair, rates);
+      const cpStr = rate.toFixed(getDisplayDecimals(pair));
+      setCurrentPrice(cpStr);
+      
+      // Recalc forecast based on current pips
+      const cp = parseFloat(cpStr);
+      const p = parseFloat(pips) || 0;
+      const pipSize = getPipDecimal(pair);
+      const newForecast = cp + (p * pipSize);
+      setForecastPrice(newForecast.toFixed(getDisplayDecimals(pair)));
+    }
+  }, [rates, pair]); // Removed 'pips' from dependency to prevent loop, logic handles init
+
+  // Handler: Change Pips -> Update Forecast
+  const handlePipsChange = (val: string) => {
+    setPips(val);
+    const p = parseFloat(val);
+    const cp = parseFloat(currentPrice);
+    if (!isNaN(p) && !isNaN(cp)) {
+      const pipSize = getPipDecimal(pair);
+      const newForecast = cp + (p * pipSize);
+      setForecastPrice(newForecast.toFixed(getDisplayDecimals(pair)));
+    }
+  };
+
+  // Handler: Change Forecast -> Update Pips
+  const handleForecastChange = (val: string) => {
+    setForecastPrice(val);
+    const fp = parseFloat(val);
+    const cp = parseFloat(currentPrice);
+    if (!isNaN(fp) && !isNaN(cp)) {
+      const pipSize = getPipDecimal(pair);
+      const newPips = (fp - cp) / pipSize;
+      setPips(newPips.toFixed(1));
+    }
+  };
+
+  // Handler: Change Current Price -> Update Forecast (keep pips constant)
+  const handleCurrentPriceChange = (val: string) => {
+    setCurrentPrice(val);
+    const cp = parseFloat(val);
+    const p = parseFloat(pips);
+    if (!isNaN(cp) && !isNaN(p)) {
+      const pipSize = getPipDecimal(pair);
+      const newForecast = cp + (p * pipSize);
+      setForecastPrice(newForecast.toFixed(getDisplayDecimals(pair)));
+    }
+  };
+
+  const calculateProfit = () => {
+    // Uses notebook logic for pip value
+    if (!rates) return { pipValue: 0, totalProfit: 0 };
+    
+    const lots = parseFloat(lotSize) || 0;
+    const pipCount = parseFloat(pips) || 0;
+    const cp = parseFloat(currentPrice) || 1; // Use current price from input
+
+    // 1. Determine Unit Size
+    const tradeSizeUnits = lots * 100000;
+
+    // 2. Determine Pip Size
+    const isJPY = pair.includes('JPY');
+    const isXAU = pair.includes('XAU');
+    const pipDecimal = getPipDecimal(pair);
+
+    // 3. Determine Exchange Rate (Use the input current price for accuracy)
+    const exchangeRate = cp; 
+
+    // 4. Calculate Pip Value in BASE Currency
+    const pipValueInBase = (pipDecimal / exchangeRate) * tradeSizeUnits;
+
+    // 5. Convert to USD (Account Currency)
+    const base = pair.split('/')[0];
+    // Need rate of Base -> USD. 
+    // rates[base] gives USD -> Base. So 1 / rates[base] is Base -> USD.
+    // If base is USD, factor is 1.
+    const rateUSDToBase = base === 'USD' ? 1 : (rates[base] || 1);
+    const pipValueUSD = pipValueInBase * (1 / rateUSDToBase); // This logic assumes rateUSDToBase is USD per 1 unit of Base?
+    // Wait: API returns rates relative to 1 USD. e.g. EUR: 0.95.
+    // So 1 USD = 0.95 EUR. 
+    // Value is in EUR. To get USD: ValueEUR / 0.95.
+    // So: pipValueUSD = pipValueInBase / rates[base]
+    
+    let finalPipValue = 0;
+    if (base === 'USD') {
+        finalPipValue = pipValueInBase;
+    } else {
+        finalPipValue = pipValueInBase / (rates[base] || 1);
+    }
+
+    // Override for XAU/USD industry standard
+    if (isXAU) finalPipValue = lots * 10;
+
+    // Override for simple USD Quote pairs (EUR/USD) to strictly $10/lot
+    // The formula above is mathematically correct for cross pairs but usually EURUSD is exactly $10.
+    if (pair.endsWith('USD') && !isXAU) finalPipValue = lots * 10;
+
+    // For USD/JPY type pairs, the formula: (0.01 / Rate) * 100,000 is correct value in USD.
+    // Let's verify USD/JPY. Base=USD. Rate=150.
+    // val_base (USD) = (0.01 / 150) * 100000 = 6.66 USD. Correct.
+
+    return {
+      pipValue: finalPipValue,
+      totalProfit: finalPipValue * pipCount
+    };
+  };
+
+  const { pipValue, totalProfit } = calculateProfit();
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-200 dark:border-slate-700 w-full max-w-md mx-auto relative overflow-hidden">
+      {/* Background Accent */}
+      <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-blue-500/10 rounded-full blur-2xl"></div>
+      
+      <div className="flex items-center justify-between mb-6 relative z-10">
+        <div className="flex items-center space-x-2">
+           <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+             <Calculator size={20} className="text-blue-600 dark:text-blue-400" />
+           </div>
+           <div>
+             <h3 className="text-lg font-bold text-slate-900 dark:text-white">Pip Calculator</h3>
+             <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center">
+               Live Rates {loading && <RefreshCw size={10} className="ml-1 animate-spin"/>}
+             </p>
+           </div>
+        </div>
+      </div>
+
+      <div className="space-y-4 relative z-10">
+        {/* Row 1: Pair & Lot */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Pair</label>
+            <select 
+              value={pair} 
+              onChange={(e) => setPair(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+            >
+              <option value="EUR/USD">EUR/USD</option>
+              <option value="GBP/USD">GBP/USD</option>
+              <option value="XAU/USD">XAU/USD</option>
+              <option value="USD/JPY">USD/JPY</option>
+              <option value="USD/CAD">USD/CAD</option>
+              <option value="USD/CHF">USD/CHF</option>
+              <option value="AUD/USD">AUD/USD</option>
+            </select>
+          </div>
+          <div>
+             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Lot Size</label>
+             <input 
+               type="number" 
+               step="0.01"
+               value={lotSize}
+               onChange={(e) => setLotSize(e.target.value)}
+               className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+             />
+          </div>
+        </div>
+
+        {/* Row 2: Current Price & Forecast Price */}
+        <div className="grid grid-cols-2 gap-4">
+           <div>
+             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Current Price</label>
+             <input 
+               type="number" 
+               value={currentPrice}
+               onChange={(e) => handleCurrentPriceChange(e.target.value)}
+               className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+             />
+           </div>
+           <div>
+             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Forecast Price</label>
+             <input 
+               type="number" 
+               value={forecastPrice}
+               onChange={(e) => handleForecastChange(e.target.value)}
+               className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+             />
+           </div>
+        </div>
+
+        {/* Pips */}
+        <div>
+           <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Target Pips</label>
+           <input 
+             type="number" 
+             value={pips}
+             onChange={(e) => handlePipsChange(e.target.value)}
+             className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+           />
+        </div>
+
+        {/* Results */}
+        <div className="grid grid-cols-2 gap-4 pt-2">
+           <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700/50">
+              <span className="text-xs text-slate-500 dark:text-slate-400 block mb-1">Pip Value (1 Pip)</span>
+              <span className="text-lg font-bold text-slate-700 dark:text-slate-200">${pipValue.toFixed(2)}</span>
+           </div>
+           <div className={`bg-emerald-50 dark:bg-emerald-900/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-800/30`}>
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 block mb-1">Estimated Profit</span>
+              <span className={`text-lg font-bold ${totalProfit >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                {totalProfit >= 0 ? '+' : ''}${totalProfit.toFixed(2)}
+              </span>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const MarketTicker = () => {
@@ -313,13 +581,13 @@ const Navbar = ({ isDarkMode, toggleTheme }: { isDarkMode: boolean, toggleTheme:
               >
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
-              <button className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-full text-sm font-bold transition-all shadow-lg shadow-blue-500/20">
+              <a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-full text-sm font-bold transition-all shadow-lg shadow-blue-500/20 inline-block">
                 Join Free Channel
-              </button>
+              </a>
             </div>
             {/* Mobile Controls */}
             <div className="flex lg:hidden items-center space-x-2">
-               <button 
+                <button 
                 onClick={toggleTheme}
                 className="p-2 rounded-full text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
@@ -343,9 +611,9 @@ const Navbar = ({ isDarkMode, toggleTheme }: { isDarkMode: boolean, toggleTheme:
               <a href="#features" onClick={() => setIsOpen(false)} className="text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-slate-800 block px-3 py-3 rounded-md text-base font-medium border-b border-slate-100 dark:border-slate-800">Why Us</a>
               <a href="#results" onClick={() => setIsOpen(false)} className="text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-slate-800 block px-3 py-3 rounded-md text-base font-medium border-b border-slate-100 dark:border-slate-800">Results</a>
               <a href="#pricing" onClick={() => setIsOpen(false)} className="text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-slate-800 block px-3 py-3 rounded-md text-base font-medium">Pricing</a>
-              <button className="w-full mt-4 bg-blue-600 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-blue-500/25 active:scale-95 transition-transform">
+              <a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="w-full mt-4 bg-blue-600 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-blue-500/25 active:scale-95 transition-transform block text-center">
                 Join Free Channel
-              </button>
+              </a>
             </div>
           </div>
         )}
@@ -386,48 +654,9 @@ const Hero = () => {
           </div>
         </div>
 
-        {/* Mock App Interface / Chart */}
-        <div className="mt-12 md:mt-16 relative mx-auto max-w-4xl transform shadow-2xl rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden transition-all duration-300">
-          <div className="bg-slate-100 dark:bg-slate-950 px-4 py-2 flex items-center space-x-2 border-b border-slate-200 dark:border-slate-700">
-            <div className="h-3 w-3 rounded-full bg-red-500"></div>
-            <div className="h-3 w-3 rounded-full bg-yellow-500"></div>
-            <div className="h-3 w-3 rounded-full bg-green-500"></div>
-            <span className="ml-4 text-xs text-slate-500 font-mono truncate">XAUUSD H1 Analysis.chart</span>
-          </div>
-          <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 space-y-4">
-              <div className="h-40 md:h-48 bg-gradient-to-b from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-xl flex items-end justify-between p-4 relative">
-                 <svg className="absolute inset-0 w-full h-full p-4" viewBox="0 0 100 50" preserveAspectRatio="none">
-                    <polyline
-                      fill="none"
-                      stroke="#10b981"
-                      strokeWidth="2"
-                      points="0,40 10,35 20,38 30,25 40,30 50,15 60,20 70,10 80,15 90,5 100,2"
-                    />
-                 </svg>
-                 <div className="absolute top-4 left-4 bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded text-xs font-bold">BUY ENTRY</div>
-              </div>
-            </div>
-            <div className="space-y-4">
-               <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <h3 className="text-slate-500 dark:text-slate-400 text-xs uppercase font-bold mb-2">Signal Alert</h3>
-                  <div className="text-xl font-bold text-slate-900 dark:text-white mb-1">XAU/USD</div>
-                  <div className="flex justify-between text-sm mb-2">
-                    <span className="text-slate-500 dark:text-slate-400">Action</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">BUY</span>
-                  </div>
-                  <div className="flex justify-between text-sm mb-2">
-                    <span className="text-slate-500 dark:text-slate-400">Entry</span>
-                    <span className="text-slate-700 dark:text-white font-mono">2032.50</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500 dark:text-slate-400">TP 1</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono">2040.00</span>
-                  </div>
-               </div>
-               <button className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95">Copy Signal</button>
-            </div>
-          </div>
+        {/* --- PIPS CALCULATOR --- */}
+        <div className="mt-12 md:mt-16 transform transition-all duration-300 hover:scale-105">
+           <PipsCalculator />
         </div>
       </div>
     </div>
@@ -509,7 +738,7 @@ const CalendarDay = ({ day, pips, isWin, noTrade }: DayData) => (
     {!noTrade && pips !== 0 ? (
       <div className="flex flex-col items-center">
          <span className={`text-[10px] sm:text-xs md:text-lg font-mono font-bold ${
-            isWin ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+           isWin ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
          }`}>
            {isWin ? '+' : ''}{pips}
          </span>
@@ -699,21 +928,32 @@ const Results = () => {
   );
 };
 
-const PricingCard = ({ title, price, period, features, recommended = false }: { title: string, price: string, period: string, features: string[], recommended?: boolean }) => (
+const PricingCard = ({ title, oldTitle, price, period, oldPeriod, features, recommended = false, badgeText }: PricingCardProps) => (
   <div className={`relative flex flex-col p-6 md:p-8 rounded-3xl border transition-all duration-300 ${
     recommended 
       ? 'bg-slate-900 dark:bg-slate-900 border-blue-500 shadow-2xl shadow-blue-900/20 scale-100 md:scale-105 z-10' 
       : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-200 dark:hover:border-slate-700'
   }`}>
     {recommended && (
-      <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-blue-600 to-emerald-500 text-white px-4 py-1 rounded-full text-xs md:text-sm font-bold shadow-lg">
+      <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-blue-600 to-emerald-500 text-white px-4 py-1 rounded-full text-xs md:text-sm font-bold shadow-lg whitespace-nowrap">
         Most Popular
       </div>
     )}
-    <h3 className={`text-base md:text-lg font-medium uppercase tracking-wide ${recommended ? 'text-slate-400' : 'text-slate-500 dark:text-slate-400'}`}>{title}</h3>
+    {badgeText && !recommended && (
+      <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 bg-rose-500 text-white px-4 py-1 rounded-full text-xs md:text-sm font-bold shadow-lg whitespace-nowrap">
+        {badgeText}
+      </div>
+    )}
+    <h3 className={`text-base md:text-lg font-medium uppercase tracking-wide ${recommended ? 'text-slate-400' : 'text-slate-500 dark:text-slate-400'}`}>
+        {oldTitle && <span className="line-through decoration-rose-500 decoration-2 opacity-70 mr-2">{oldTitle}</span>}
+        {title}
+    </h3>
     <div className={`mt-4 flex items-baseline ${recommended ? 'text-white' : 'text-slate-900 dark:text-white'}`}>
       <span className="text-3xl md:text-4xl font-extrabold tracking-tight">${price}</span>
-      <span className="ml-1 text-lg md:text-xl text-slate-500">/{period}</span>
+      <span className="ml-1 text-lg md:text-xl text-slate-500">
+        {oldPeriod && <span className="line-through decoration-rose-500 decoration-2 mr-1">/{oldPeriod}</span>}
+        /{period}
+      </span>
     </div>
     <ul className="mt-6 md:mt-8 space-y-4 flex-1">
       {features.map((feature, idx) => (
@@ -723,13 +963,13 @@ const PricingCard = ({ title, price, period, features, recommended = false }: { 
         </li>
       ))}
     </ul>
-    <button className={`mt-8 w-full block py-3 px-6 border border-transparent rounded-full text-center font-bold transition-all shadow-lg active:scale-95 ${
+    <a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className={`mt-8 w-full block py-3 px-6 border border-transparent rounded-full text-center font-bold transition-all shadow-lg active:scale-95 ${
       recommended 
         ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-blue-500/25' 
         : 'bg-slate-100 dark:bg-slate-800 text-blue-600 dark:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700'
     }`}>
       {price === '0' ? 'Join Now' : 'Get Started'}
-    </button>
+    </a>
   </div>
 );
 
@@ -741,12 +981,16 @@ const Pricing = () => {
           <h2 className="text-3xl font-bold text-slate-900 dark:text-white sm:text-4xl">Simple, Transparent Pricing</h2>
           <p className="mt-4 text-slate-600 dark:text-slate-400">Choose the plan that fits your trading journey.</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto items-start">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 max-w-7xl mx-auto items-start">
           <PricingCard 
-            title="Weekly Trial" 
+            title="2 Weeks Access" 
+            oldTitle="Weekly Trial"
             price="20" 
-            period="wk" 
+            period="2wks" 
+            oldPeriod="wk"
+            badgeText="Special Offer  Limited Time Only"
             features={[
+              "2 Weeks for Price of 1",
               "Full VIP Signal Access",
               "Entry & Exit Updates"
             ]} 
@@ -755,11 +999,21 @@ const Pricing = () => {
             title="Monthly VIP" 
             price="49" 
             period="mo" 
-            recommended={true}
             features={[
               "All Weekly Features",
               "Priority Support",
               "Risk Management Guide"
+            ]} 
+          />
+          <PricingCard 
+            title="3 Months Access" 
+            price="120" 
+            period="3mo" 
+            recommended={true}
+            features={[
+              "Everything in Monthly",
+              "Save ~18% vs Monthly",
+              "Quarterly Market Outlook"
             ]} 
           />
           <PricingCard 
@@ -772,7 +1026,7 @@ const Pricing = () => {
               "Advanced Strategy PDF"
             ]} 
           />
-           <PricingCard 
+            <PricingCard 
             title="Yearly Pro" 
             price="300" 
             period="yr" 
@@ -801,13 +1055,12 @@ const Footer = () => {
           <div>
             <h4 className="text-slate-900 dark:text-white font-bold mb-4">Platform</h4>
             <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">Telegram Channel</a></li>
+              <li><a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Telegram Channel</a></li>
               <li><a href="https://www.tradingview.com/u/IntradayPips/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">TradingView</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">Instagram</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">Facebook</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">LinkedIn</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">X (Twitter)</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">YouTube</a></li>
+              <li><a href="https://www.instagram.com/intraday.pips/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Instagram</a></li>
+              <li><a href="https://x.com/Intraday_Pips" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">X (Twitter)</a></li>
+              <li><a href="https://www.youtube.com/channel/UC0Y5fPjrcWYASYahFPog98Q" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">YouTube</a></li>
+              <li><a href="https://discord.gg/6tXr7TPw" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Discord</a></li>
             </ul>
           </div>
           <div>
@@ -815,24 +1068,29 @@ const Footer = () => {
             <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
               <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">Terms of Service</a></li>
               <li><a href="mailto:hello@intradaypips.com" className="hover:text-blue-600 dark:hover:text-blue-400">hello@intradaypips.com</a></li>
-              <li><a href="#" className="hover:text-blue-600 dark:hover:text-blue-400">Privacy Policy</a></li>
+              <li><a href="https://drive.google.com/file/d/1kF5oF4CXNUvumq8g9hpu8X8Vbb2iJ1la/view?usp=sharing" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Privacy Policy</a></li>
             </ul>
           </div>
           <div>
             <h4 className="text-slate-900 dark:text-white font-bold mb-4">Community</h4>
-            <button className="w-full bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-full font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all">
+            <a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="w-full bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-full font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-center block">
                 Join Free Channel
-            </button>
+            </a>
             <div className="flex space-x-4 mt-6 justify-start md:justify-start"> 
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors"><Instagram size={20} /></a>
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors"><Facebook size={20} /></a>
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors"><Linkedin size={20} /></a>
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors"><Send size={20} /></a>
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors">
+               <a href="https://www.instagram.com/intraday.pips/" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors"><Instagram size={20} /></a>
+               
+               {/* TikTok Icon */}
+               <a href="https://www.tiktok.com/@intraday.pips" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors">
+                 <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+               </a>
+
+               <a href="https://discord.gg/6tXr7TPw" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors"><MessageCircle size={20} /></a>
+               <a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors"><Send size={20} /></a>
+               <a href="https://x.com/Intraday_Pips" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors">
                   {/* X Icon SVG */}
                   <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                </a>
-               <a href="#" className="text-slate-400 hover:text-blue-500 transition-colors"><Youtube size={20} /></a>
+               <a href="https://www.youtube.com/channel/UC0Y5fPjrcWYASYahFPog98Q" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-500 transition-colors"><Youtube size={20} /></a>
             </div>
           </div>
         </div>
