@@ -1056,6 +1056,8 @@ const Footer = () => {
             <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
               <li><a href="https://t.me/IntradayPips" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Telegram Channel</a></li>
               <li><a href="https://www.tradingview.com/u/IntradayPips/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">TradingView</a></li>
+
+              <li><a href="https://www.tiktok.com/@intraday.pips" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Tiktok</a></li>
               <li><a href="https://www.instagram.com/intraday.pips/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">Instagram</a></li>
               <li><a href="https://x.com/Intraday_Pips" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">X (Twitter)</a></li>
               <li><a href="https://www.youtube.com/channel/UC0Y5fPjrcWYASYahFPog98Q" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">YouTube</a></li>
